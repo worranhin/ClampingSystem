@@ -1,43 +1,10 @@
 #include <Arduino.h>
-#include <SoftwareSerial.h>
 #include <ModbusMaster.h>
+#include <SoftwareSerial.h>
 // #include <arduino-timer.h>
-
-// 状态常量
-// #define FREEZING 0
-// #define CLAMPING 1
-// #define RELEASING 2
-
-#define DIR_CLAMP HIGH // 电机运动方向
-#define DIR_RELEASE LOW
-
-// 引脚定义
-const int freezeBtn = 9; // 控制按钮
-const int clampBtn = 10;
-const int releaseBtn = 8;
-
-const int stepPin = 6; // 驱动引脚
-const int dirPin = 5;
-const int enablePin = 7; // 使能引脚，低电平有效
-
-const int MAX485_RE_NEG = 12; // 低电平接收，高电平发送
-const int softwareRX = 11;
-const int softwareTX = 13;
-
-void initPin()
-{
-  pinMode(freezeBtn, INPUT_PULLUP);
-  pinMode(clampBtn, INPUT_PULLUP);
-  pinMode(releaseBtn, INPUT_PULLUP);
-  pinMode(stepPin, OUTPUT);
-  pinMode(dirPin, OUTPUT);
-  pinMode(enablePin, OUTPUT);
-  pinMode(MAX485_RE_NEG, OUTPUT);
-  digitalWrite(stepPin, LOW);
-  digitalWrite(dirPin, LOW);
-  digitalWrite(enablePin, HIGH);
-  digitalWrite(MAX485_RE_NEG, LOW); // Init in receive mode
-}
+#include "StepDriver.h"
+#include "config.h"
+#include "instruction.h"
 
 // 函数声明
 
@@ -49,113 +16,123 @@ double getForce(void);
 void onePulse(int pulsePin, unsigned long _delayms);
 void preTransmission();
 void postTransmission();
-// void ISR_motor(void);
-
 
 // 全局变量
-// int State;
+State mainState;
 SoftwareSerial mySerial(softwareRX, softwareTX);  // RX, TX  软件串口
 ModbusMaster mbMaster;  // instantiate ModbusMaster object
+StepDriver mainDriver;
 // auto timer = timer_create_default();  // 软件定时器
 
-enum State {
-  FREEZING,
-  CLAMPING,
-  RELEASING
-} state;  // 运行状态
-
-void setup()
-{
+void setup() {
   // put your setup code here, to run once:
-  initPin();
-  state = FREEZING;
 
+  // 串口通信初始化
   Serial.begin(9600);
-  while (!Serial);
-  Serial.println("Hardware Serial up!");
+  while (!Serial)
+    ;
+  Serial.println("Hardware serial up!");
+
+  // 引脚设置
+  pinMode(freezeBtn, INPUT_PULLUP);
+  pinMode(clampBtn, INPUT_PULLUP);
+  pinMode(releaseBtn, INPUT_PULLUP);
+  pinMode(MAX485_RE_NEG, OUTPUT);
+  digitalWrite(MAX485_RE_NEG, LOW);  // Init in receive mode
+  Serial.println("Pin setup!");
 
   mySerial.begin(9600);
-  while (!Serial);
+  while (!mySerial)
+    ;
   Serial.println("Software serial up!");
 
-  // 
+  // Modbus setup
   mbMaster.begin(1, mySerial);  // Modbus slave ID 1
   // Callbacks allow us to configure the RS485 transceiver correctly
   mbMaster.preTransmission(preTransmission);
   mbMaster.postTransmission(postTransmission);
   Serial.println("Modbus master up!");
 
+  // 步进驱动 setup
+  mainDriver.init(enablePin, dirPin, stepPin);
+  Serial.println("step driver up!");
+
   // 手动置零
   int result = -1;
   mbMaster.clearTransmitBuffer();
   mbMaster.setTransmitBuffer(0, 0x0001);
-  while (result != mbMaster.ku8MBSuccess)
-  {
+  while (result != mbMaster.ku8MBSuccess) {
     result = mbMaster.writeMultipleRegisters(0x005E, 1);
     Serial.println(result, HEX);
   }
+  Serial.println("Set zero done!");
+
+  // Global variable setup
+  mainState = FREEZING;
+  Serial.println("Global setup!");
 
   Serial.println("setup end!");
 }
 
-void loop()
-{
+void loop() {
   // put your main code here, to run repeatedly:
   // timer.tick();
+  mainDriver.routine();
+
   handleBtn();
-  // const int initSpeed = 10;
-  switch (state)
-  {
-  case FREEZING:
-    motorFreeze();
-    break;
-  case CLAMPING:
-    motorClamp(false);
-    break;
-  case RELEASING:
-    motorRelease(false);
-    break;
+  switch (mainState) {
+    case FREEZING:
+      motorFreeze();
+      break;
+    case CLAMPING:
+      motorClamp(false);
+      break;
+    case RELEASING:
+      motorRelease(false);
+      break;
   }
 }
 
 // 处理按钮信号
-void handleBtn(void)
-{
-  State tempState = state;
-  if (digitalRead(freezeBtn) == LOW)
-  {
-    tempState = FREEZING;
-    motorFreeze();
-    Serial.println("state: FREEZING!");
+void handleBtn(void) {
+  State tempState = mainState;
+  unsigned int delayms = 10;
+
+  if (digitalRead(freezeBtn) == LOW) {
+    delay(delayms);  // 消抖
+    if (digitalRead(freezeBtn) == LOW) {
+      tempState = FREEZING;
+      motorFreeze();
+      Serial.println("state: FREEZING!");
+    }
+  } else if (digitalRead(clampBtn) == LOW) {
+    delay(delayms);
+    if (digitalRead(clampBtn) == LOW) {
+      tempState = CLAMPING;
+      motorClamp(true);
+      Serial.println("state: CLAMPING!");
+    }
+  } else if (digitalRead(releaseBtn) == LOW) {
+    delay(delayms);
+    if (digitalRead(releaseBtn) == LOW) {
+      tempState = RELEASING;
+      motorRelease(true);
+      Serial.println("state: RELEASING!");
+    }
   }
-  else if (digitalRead(clampBtn) == LOW)
-  {
-    tempState = CLAMPING;
-    motorClamp(true);
-    Serial.println("state: CLAMPING!");
-  }
-  else if (digitalRead(releaseBtn) == LOW)
-  {
-    tempState = RELEASING;
-    motorRelease(true);
-    Serial.println("state: RELEASING!");
-  }
-  state = tempState;
+  mainState = tempState;
 }
 
 // 电机停止
-void motorFreeze()
-{
-  digitalWrite(enablePin, HIGH);
+void motorFreeze() {
+  mainDriver.stop();
 }
 
 // 电机夹紧
-void motorClamp(bool isInit)
-{
-  if (isInit)
-  {
-    digitalWrite(enablePin, LOW);
-    digitalWrite(dirPin, DIR_CLAMP);
+void motorClamp(bool isInit) {
+  if (isInit) {
+    mainDriver.enable(true);
+    mainDriver.setDirection(DIR_CLAMP);
   }
   // PD 控制算法
   const double targetForce = -50.0;
@@ -166,47 +143,41 @@ void motorClamp(bool isInit)
   Serial.println(measureForce);
   static double e0;
   double errorForce = measureForce - targetForce;
-  double e = errorForce; // (50 -> 0)
+  double e = errorForce;  // (50 -> 0)
   e0 = isInit ? e : e0;
-  double de = e - e0;                    // 出现变化时为正数
-  double velocity = KP * e + KD * de; // (mm/s)
-  velocity = velocity < 0 ? 0 : velocity;
+  double de = e - e0;  // 出现变化时为正数
   e0 = e;
+  double velocity = KP * e + KD * de;  // (mm/s)
+  velocity = velocity < 0 ? 0 : velocity;
+  Serial.print("velocity: ");
+  Serial.println(velocity);
 
   // 电机控制程序
-  double frequency = velocity * 1000 / 6.15; // (pulse/s) 即 Hz
-  double period = 1 / frequency;             // (s)
+  double frequency = velocity * 1000 / 6.15;  // (pulse/s) 即 Hz
+  double period = 1 / frequency;              // (s)
   unsigned long delayms = 1000 * period;
-  onePulse(stepPin, delayms);
-  // timer.in(delayms, &motorClamp);
+  // onePulse(stepPin, delayms);
+  mainDriver.oneStep();
+  delay(delayms);
 }
 
-// 电机释放
-void motorRelease(bool isInit)
-{
-  static unsigned int pulseCount;
-  const unsigned long delayms = 5;
+/**
+ * 释放电机
+ * @param isInit 是否初始化，状态切换时设为 true
+ */
+void motorRelease(bool isInit) {
+  // unsigned int pulseCount = 813;  // 5mm
 
-  if (isInit)
-  {
-    pulseCount = 813;  // 5mm
-    digitalWrite(enablePin, LOW);
-    digitalWrite(dirPin, DIR_RELEASE);
+  if (isInit) {
+    mainDriver.enable(true);
+    mainDriver.setDirection(DIR_RELEASE);
   }
 
-  if (pulseCount-- > 0)
-  {
-    onePulse(stepPin, delayms);
-  }
-  else
-  {
-    state = FREEZING;
-  }
+  mainDriver.goSteps(900);
 }
 
 // 获取力，压力为正，拉力为负
-double getForce()
-{
+double getForce() {
   uint8_t result;
   double force;
 
@@ -214,7 +185,7 @@ double getForce()
 
   mbMaster.clearResponseBuffer();
   result = mbMaster.readHoldingRegisters(0x0050, 2);
-  if(result == mbMaster.ku8MBSuccess) {
+  if (result == mbMaster.ku8MBSuccess) {
     uint16_t dataHigh = mbMaster.getResponseBuffer(0);
     uint16_t dataLow = mbMaster.getResponseBuffer(1);
     uint32_t data = uint32_t(dataLow) + (uint32_t(dataHigh) << 16);
@@ -231,9 +202,8 @@ double getForce()
 }
 
 // 发送单个脉冲
-void onePulse(int pulsePin, unsigned long _delayms)
-{
-  const unsigned int holdOnTime = 100; // 大于 1us
+void onePulse(int pulsePin, unsigned long _delayms) {
+  const unsigned int holdOnTime = 100;  // 大于 1us
   digitalWrite(pulsePin, HIGH);
   delayMicroseconds(holdOnTime);
   digitalWrite(pulsePin, LOW);
@@ -241,12 +211,10 @@ void onePulse(int pulsePin, unsigned long _delayms)
   delay(_delayms);
 }
 
-void preTransmission()
-{
+void preTransmission() {
   digitalWrite(MAX485_RE_NEG, 1);
 }
 
-void postTransmission()
-{
+void postTransmission() {
   digitalWrite(MAX485_RE_NEG, 0);
 }
