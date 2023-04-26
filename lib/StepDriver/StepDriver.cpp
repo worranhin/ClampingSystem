@@ -53,28 +53,28 @@ int StepDriver::setDirection(int dir) {
  * @param freq 脉冲频率（单位 Hz）
  */
 int StepDriver::setFrequency(unsigned int freq) {
-  if(freq == 0) {
-    _alterState(FREEZE);
-    return 1;
-  }
   _frequency = freq;
-  _period = 1000.0 / freq;
+  _period = freq == 0? UINT32_MAX : (1000.0 / freq);
   return 0;
 }
 
 /**
  * 设置周期
- * @param per 脉冲周期（ms）
+ * @param period 脉冲周期（ms）
  */
-int StepDriver::setPeriod(unsigned long per) {
-  if(per == 0) {
-    _frequency = INT16_MAX;
-    _period = 0;
-    return 1;
-  }
-  _frequency = 1000.0 / per;
-  _period = per;
+int StepDriver::setPeriod(unsigned long period) {
+  _frequency = period == 0? UINT16_MAX: (1000.0 / period); 
+  _period = period;
   return 0;
+}
+
+/**
+ * 设置发出每个脉冲前的回调函数，可用于闭环控制算法
+ * @param prePulse 发送脉冲前的回调函数
+ * @warning 仅在 start() 时执行
+*/
+void StepDriver::setPrePulse(void (*prePulse)()) {
+  _prePulse = prePulse;
 }
 
 /**
@@ -93,6 +93,10 @@ unsigned int StepDriver::getFrequency() {
   return _frequency;
 }
 
+/**
+ * 获取当前周期
+ * @return 周期，单位 ms
+*/
 unsigned long StepDriver::getPeriod() {
   return _period;
 }
@@ -166,6 +170,7 @@ void StepDriver::routine() {
 
     case ALWAYS:
       // delayms = 1.0 / _frequency * 1000;  // ms
+      _prePulse();
       tempMillis = millis();
       if (tempMillis - _lastStep > _period) {
         _lastStep = tempMillis;
