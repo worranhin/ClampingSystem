@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "Button.h"
+#include "PID_control.h"
 #include "Sensor.h"
 #include "StepDriver.h"
 #include "config.h"
@@ -11,17 +12,16 @@
 
 void changeState(State toState);
 void btnRoutine();
-void clampRoutine();
+// void clampRoutine();
 void communicationRoutine();
-unsigned int force2Frequency_PD(double force, double lastForce);
 void preTransmission();
 void postTransmission();
 void prePulse();
+void afterSteps();
 
 /// 全局变量 ///
 
 State mainState;
-double lastForce;
 
 // StepDriver mainDriver(enablePin, dirPin, stepPin);
 StepDriver mainDriver;
@@ -29,9 +29,7 @@ Sensor mainSensor(softwareRX, softwareTX, preTransmission, postTransmission);
 Button freezeBtn(freezeBtnPin);
 Button clampBtn(clampBtnPin);
 Button releaseBtn(releaseBtnPin);
-// SoftwareSerial mySerial(softwareRX, softwareTX);  // RX, TX  软件串口
-// ModbusMaster mbMaster;  // instantiate ModbusMaster object
-// auto timer = timer_create_default();  // 软件定时器
+PID_Control mainPID(KP, KI, KD, TARGET_FORCE);
 
 void setup() {
   // 串口通信初始化
@@ -40,21 +38,13 @@ void setup() {
     ;
   Serial.println("Hardware serial up!");
 
-  // 引脚设置
-  pinMode(MAX485_RE_NEG, OUTPUT);
-  digitalWrite(MAX485_RE_NEG, LOW);  // Init in receive mode
-  Serial.println("Pin setup!");
-
   // 步进驱动和传感器 setup
   mainDriver.init(enablePin, dirPin, stepPin);
-  mainDriver.setPrePulse([]() {
-    double force = mainSensor.getForce();
-    unsigned int freq = force2Frequency_PD(force, lastForce);
-    mainDriver.setFrequency(freq);
-  });
+  mainDriver.setPrePulse(prePulse);
+  mainDriver.setAfterSteps(afterSteps);
   Serial.println("step driver up!");
 
-  mainSensor.init(9600);
+  mainSensor.init(57600);
   Serial.println("sensor up!");
 
   // 上电手动置零
@@ -71,7 +61,6 @@ void setup() {
 
   // Global variable setup
   mainState = FREEZING;
-  lastForce = 0;
   Serial.println("Global variable setup!");
 
   Serial.println("setup end!");
@@ -103,18 +92,18 @@ void changeState(State toState) {
     case State::CLAMPING: {
       mainState = CLAMPING;
       double tempForce = mainSensor.getForce();
-      unsigned int tempFreq = force2Frequency_PD(tempForce, tempForce);
-      lastForce = tempForce;
-      mainDriver.setDirection(DIR_CLAMP);
-      mainDriver.setFrequency(tempFreq);
+      mainPID.init();
+      double tempSpeed = mainPID.forceToVelocity(tempForce);
+      mainDriver.setSpeed(tempSpeed);
       mainDriver.start();
       Serial.println("state: CLAMPING!");
+      Serial.println("time(ms), force(g)");
       break;
     }
 
     case State::RELEASING: {
       mainState = RELEASING;
-      mainDriver.setFrequency(100);
+      mainDriver.setFrequency(200);
       mainDriver.setDirection(DIR_RELEASE);
       mainDriver.goSteps(813);
       Serial.println("state: RELEASING!");
@@ -135,46 +124,30 @@ void btnRoutine() {
     changeState(State::RELEASING);
 }
 
-/// @brief 夹持状态的例程
-void clampRoutine() {
-  double result = mainSensor.getForce();
-  if (result == -1)
-    return;
-  double force = mainSensor.getForce();
-  unsigned int freq = force2Frequency_PD(force, lastForce);
-  lastForce = force;
-  mainDriver.setFrequency(freq);
-}
+// /// @brief 夹持状态的例程
+// void clampRoutine() {
+//   double result = mainSensor.getForce();
+//   if (result == -1)
+//     return;
+//   double force = mainSensor.getForce();
+//   unsigned int freq = force2Frequency_PD(force, lastForce);
+//   lastForce = force;
+//   mainDriver.setFrequency(freq);
+// }
 
 /// @brief 通讯例程
 void communicationRoutine() {
-  static unsigned long lastCommunication = 0;
-  if (millis() - lastCommunication > 1000) {
-    double tempForce = mainSensor.getForce();
-    Serial.print(millis());
-    Serial.print(", ");
-    Serial.println(tempForce);
-    lastForce = tempForce;
-    lastCommunication = millis();
-  }
-}
-
-/// @brief PD 控制算法，输入为力，输出速度
-/// @param force 测得的力
-/// @param lastForce 上一次测得的力
-/// @return 返回频率
-unsigned int force2Frequency_PD(double force, double lastForce) {
-  // PD 控制算法
-  const double targetForce = -100.0;  // 负号表示拉力
-  const double KP = 0.04;
-  const double KD = 0.01;
-  double e = force - targetForce;  // (50 -> 0)
-  double e0 = lastForce - targetForce;
-  double de = e - e0;                  // 出现变化时为正数
-  double velocity = KP * e + KD * de;  // (mm/s)
-  velocity = velocity < 0 ? 0 : velocity;
-  unsigned int frequency = velocity * 1000 / 6.15;  // (pulse/s) 即 Hz
-  return frequency;
+  // static unsigned long lastCommunication = 0;
+  // if (millis() - lastCommunication > SAMPLING_PERIOD) {
+  //   // double tempForce = mainSensor.getForce();
+  //   Serial.print(millis());
+  //   Serial.print(", ");
+  //   Serial.print(mainSensor.getForce());
+  //   Serial.print(", ");
+  //   Serial.println(lastForce);
+  //   // lastForce = tempForce;
+  //   lastCommunication = millis();
+  // }
 }
 
 /// @brief Modbus 通信前回调函数，关闭接收，开启发送
@@ -190,15 +163,18 @@ void postTransmission() {
 /// @brief 电机脉冲回调
 void prePulse() {
   static unsigned long lastGetForce = 0;
-  if(millis() - lastGetForce < 1000) {
+  if (millis() - lastGetForce < SAMPLING_PERIOD) {
     return;
   }
-  double result = mainSensor.getForce();
-  if (result == -1)
-    return;
   double force = mainSensor.getForce();
-  unsigned int freq = force2Frequency_PD(force, lastForce);
-  lastForce = force;
-  mainDriver.setFrequency(freq);
+  Serial.print(millis());
+  Serial.print(", ");
+  Serial.println(force);
+  mainDriver.setSpeed(mainPID.forceToVelocity(force));
   lastGetForce = millis();
+}
+
+/// @brief 按步执行后的回调函数
+void afterSteps() {
+  changeState(State::FREEZING);
 }

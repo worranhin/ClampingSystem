@@ -2,13 +2,34 @@
 
 /**
  * 构造函数
-*/
+ */
 StepDriver::StepDriver() {
   _direction = 0;
   _frequency = 0;
   _isEnable = false;
   _state = FREEZE;
 }
+
+/// @brief 构造函数
+/// @param enable 使能引脚
+/// @param dir 方向引脚
+/// @param step 步进引脚
+StepDriver::StepDriver(int enable, int dir, int step)
+    : _enablePin_N(enable), _dirPin(dir), _stepPin(step) {
+  pinMode(_enablePin_N, OUTPUT);
+  pinMode(_dirPin, OUTPUT);
+  pinMode(_stepPin, OUTPUT);
+  digitalWrite(_enablePin_N, HIGH);
+  digitalWrite(_dirPin, LOW);
+  digitalWrite(_stepPin, LOW);
+
+  _direction = 0;
+  _frequency = 0;
+  _isEnable = false;
+  _state = FREEZE;
+  _lastStep = millis();
+  _stepLeft = 0;
+};
 
 /**
  * @brief 配置引脚
@@ -54,7 +75,7 @@ int StepDriver::setDirection(int dir) {
  */
 int StepDriver::setFrequency(unsigned int freq) {
   _frequency = freq;
-  _period = freq == 0? UINT32_MAX : (1000.0 / freq);
+  _period = freq == 0 ? UINT32_MAX : (1000.0 / freq);
   return 0;
 }
 
@@ -63,18 +84,36 @@ int StepDriver::setFrequency(unsigned int freq) {
  * @param period 脉冲周期（ms）
  */
 int StepDriver::setPeriod(unsigned long period) {
-  _frequency = period == 0? UINT16_MAX: (1000.0 / period); 
+  _frequency = period == 0 ? UINT16_MAX : (1000.0 / period);
   _period = period;
   return 0;
+}
+
+void StepDriver::setSpeed(double v) {
+  if (v >= 0) {
+    setDirection(DIR_CLAMP);
+    _frequency = v * 1000 / 6.15;
+    _period = _frequency == 0 ? UINT32_MAX : (1000.0 / _frequency);
+  } else if (v < 0) {
+    setDirection(DIR_RELEASE);
+    _frequency = (-v) * 1000 / 6.15;
+    _period = _frequency == 0 ? UINT32_MAX : (1000.0 / _frequency);
+  }
 }
 
 /**
  * 设置发出每个脉冲前的回调函数，可用于闭环控制算法
  * @param prePulse 发送脉冲前的回调函数
  * @warning 仅在 start() 时执行
-*/
-void StepDriver::setPrePulse(void (*prePulse)()) {
-  _prePulse = prePulse;
+ */
+void StepDriver::setPrePulse(void (*callback)()) {
+  _prePulse = callback;
+}
+
+/// @brief 设置在运行指定步数结束后的回调函数
+/// @param callback 回调函数
+void StepDriver::setAfterSteps(void (*callback)()) {
+  _afterSteps = callback;
 }
 
 /**
@@ -96,7 +135,7 @@ unsigned int StepDriver::getFrequency() {
 /**
  * 获取当前周期
  * @return 周期，单位 ms
-*/
+ */
 unsigned long StepDriver::getPeriod() {
   return _period;
 }
@@ -170,7 +209,8 @@ void StepDriver::routine() {
 
     case ALWAYS:
       // delayms = 1.0 / _frequency * 1000;  // ms
-      _prePulse();
+      if (_prePulse != NULL)
+        _prePulse();
       tempMillis = millis();
       if (tempMillis - _lastStep > _period) {
         _lastStep = tempMillis;
@@ -181,6 +221,8 @@ void StepDriver::routine() {
     case STEPS:
       if (_stepLeft == 0) {
         _alterState(FREEZE);
+        if (_afterSteps != NULL)
+          _afterSteps();
         break;
       }
 
@@ -217,7 +259,7 @@ int StepDriver::goSteps(unsigned long steps) {
 
 /**
  * 改变状态
-*/
+ */
 int StepDriver::_alterState(DriverState toState) {
   switch (toState) {
     case FREEZE:
