@@ -10,11 +10,9 @@ Sensor::Sensor(int RX, int TX, TransCallback preTrans, TransCallback postTrans)
   _sensorModbus.postTransmission(postTrans);
 }
 
-/**
- * 初始化
- * @param baud 波特率，支持以下波特率 300, 600, 1200, 2400, 4800, 9600, 14400,
- * 19200, 28800, 31250, 38400, 57600, 115200
- */
+/// @brief 初始化
+/// @param baud 波特率，支持以下波特率 300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 31250, 38400, 57600, 115200
+/// @return 成功返回 0
 int Sensor::init(long baud) {
   _sensorSerial.begin(baud);
   _sensorModbus.begin(1, _sensorSerial);
