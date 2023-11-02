@@ -24,13 +24,20 @@ void PID_Control::init() {
 /// @param force 力，单位：g
 /// @return 速度，单位：mm/s
 double PID_Control::forceToVelocity(double force) {
-  if (!_startIntegral && fabs(force) > fabs(_targetForce / 2))
-    _startIntegral = true;
+  // if (!_startIntegral && fabs(force) > fabs(_targetForce * 0.95))
+  //   _startIntegral = true;
   double e = force - _targetForce;
+  _ei += e;
   double de = e - _e0;
   double v = _KP * e + _KI * _ei + _KD * de;  // (mm/s)
-  if (_startIntegral)
-    _ei += e;
+
+  // if (_startIntegral)
+
+  if (_ei > 100)
+    _ei = 100;
+  else if (_ei < -100)
+    _ei = -100;
+
   _e0 = e;
 
   return v;

@@ -7,10 +7,10 @@
 // 常量定义
 
 const unsigned long SAMPLING_PERIOD = 10;  // 采样周期 (ms)
-const double TARGET_FORCE = -100.0;        // 负号表示拉力
-const double KP = 0.04;
-const double KI = 0.0001;
-const double KD = 0.03;
+const double TARGET_FORCE = -200.0;        // 负号表示拉力
+const double KP = 0.02;
+const double KI = 0.0005;
+const double KD = 0.01;
 
 // 引脚定义
 const int freezeBtnPin = 12;  // 控制按钮

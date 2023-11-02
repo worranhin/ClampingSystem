@@ -92,11 +92,11 @@ int StepDriver::setPeriod(unsigned long period) {
 void StepDriver::setSpeed(double v) {
   if (v >= 0) {
     setDirection(DIR_CLAMP);
-    _frequency = v * 1000 / 6.15;
+    _frequency = v * 1000 / 6.15 * _MS;
     _period = _frequency == 0 ? UINT32_MAX : (1000.0 / _frequency);
   } else if (v < 0) {
     setDirection(DIR_RELEASE);
-    _frequency = (-v) * 1000 / 6.15;
+    _frequency = (-v) * 1000 / 6.15 * _MS;
     _period = _frequency == 0 ? UINT32_MAX : (1000.0 / _frequency);
   }
 }

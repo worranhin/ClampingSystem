@@ -14,6 +14,7 @@ void changeState(State toState);
 void btnRoutine();
 // void clampRoutine();
 void communicationRoutine();
+void sensorRoutine();
 void preTransmission();
 void postTransmission();
 void prePulse();
@@ -91,10 +92,10 @@ void changeState(State toState) {
 
     case State::CLAMPING: {
       mainState = CLAMPING;
-      double tempForce = mainSensor.getForce();
+      // double tempForce = mainSensor.getForce();
       mainPID.init();
-      double tempSpeed = mainPID.forceToVelocity(tempForce);
-      mainDriver.setSpeed(tempSpeed);
+      // double tempSpeed = mainPID.forceToVelocity(tempForce);
+      mainDriver.setSpeed(10);
       mainDriver.start();
       Serial.println("state: CLAMPING!");
       Serial.println("time(ms), force(g)");
@@ -103,8 +104,9 @@ void changeState(State toState) {
 
     case State::RELEASING: {
       mainState = RELEASING;
-      mainDriver.setFrequency(200);
-      mainDriver.setDirection(DIR_RELEASE);
+      mainDriver.setSpeed(-10);
+      // mainDriver.setFrequency(-2);
+      // mainDriver.setDirection(DIR_RELEASE);
       mainDriver.goSteps(813);
       Serial.println("state: RELEASING!");
       break;
@@ -150,6 +152,22 @@ void communicationRoutine() {
   // }
 }
 
+void sensorRoutine() {
+  static unsigned long lastGetForce = 0;
+  if (millis() - lastGetForce < SAMPLING_PERIOD) {
+    return;
+  }
+  double force = mainSensor.getForce();
+  Serial.print(millis());
+  Serial.print(", ");
+  Serial.println(force);
+  lastGetForce = millis();
+  if (fabs(force) < fabs(TARGET_FORCE * 0.7)) {
+    return;
+  }
+  mainDriver.setSpeed(mainPID.forceToVelocity(force));
+}
+
 /// @brief Modbus 通信前回调函数，关闭接收，开启发送
 void preTransmission() {
   // digitalWrite(MAX485_RE_NEG, 1);
@@ -170,11 +188,15 @@ void prePulse() {
   Serial.print(millis());
   Serial.print(", ");
   Serial.println(force);
-  mainDriver.setSpeed(mainPID.forceToVelocity(force));
   lastGetForce = millis();
+  if (fabs(force) < fabs(TARGET_FORCE * 0.7)) {
+    return;
+  }
+  mainDriver.setSpeed(mainPID.forceToVelocity(force));
 }
 
 /// @brief 按步执行后的回调函数
 void afterSteps() {
+  mainSensor.setZero();
   changeState(State::FREEZING);
 }

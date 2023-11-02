@@ -40,6 +40,7 @@ class StepDriver {
   int _dirPin;                       // 方向引脚
   int _stepPin;                      // 驱动引脚
   int _direction = 0;                // 方向
+  const int _MS = 1;                 // 细分
   unsigned int _frequency = 0;       // 频率 (Hz)
   unsigned long _period = 0;         // 周期 (ms)
   bool _isEnable = false;            // 使能
